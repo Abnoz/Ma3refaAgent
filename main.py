@@ -7,10 +7,9 @@ from utils.text_processor import TextProcessor
 from utils.search_helper import SearchHelper
 from utils.qa_chain import QAChainHelper
 
-# Initialize colorama for colored output
 init()
 
-# Configure logging
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -37,16 +36,22 @@ def setup_environment():
     if missing_vars:
         raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
 
+# In the process_documents function, update the SearchHelper initialization
 def process_documents(container_name: str):
     """Process documents from blob storage and index them."""
     try:
-        # Initialize helpers
-        blob_helper = BlobStorageHelper(os.getenv('AZURE_STORAGE_CONNECTION_STRING'))
-        text_processor = TextProcessor()
+
+        cache_dir = os.getenv('CACHE_DIR', '.cache')
+        blob_helper = BlobStorageHelper(
+            os.getenv('AZURE_STORAGE_CONNECTION_STRING'),
+            cache_dir=cache_dir
+        )
+        text_processor = TextProcessor(cache_dir=cache_dir)
         search_helper = SearchHelper(
             endpoint=os.getenv('AZURE_SEARCH_ENDPOINT'),
             key=os.getenv('AZURE_SEARCH_KEY'),
-            index_name=os.getenv('AZURE_SEARCH_INDEX_NAME')
+            index_name=os.getenv('AZURE_SEARCH_INDEX_NAME'),
+            cache_dir=cache_dir  # Pass cache_dir to SearchHelper
         )
         qa_helper = QAChainHelper(
             openai_endpoint=os.getenv('AZURE_OPENAI_ENDPOINT'),
@@ -54,29 +59,26 @@ def process_documents(container_name: str):
             openai_api_version=os.getenv('AZURE_OPENAI_API_VERSION'),
             embedding_deployment=os.getenv('AZURE_OPENAI_EMBEDDING_DEPLOYMENT'),
             chat_deployment=os.getenv('AZURE_OPENAI_CHAT_DEPLOYMENT'),
-            search_helper=search_helper
+            search_helper=search_helper,
+            cache_dir=cache_dir
         )
 
-        # Download PDFs
+
         logger.info("Downloading PDFs from blob storage...")
         pdf_files = blob_helper.download_pdfs_from_container(container_name)
         
         if not pdf_files:
             raise ValueError(f"No PDF files found in container {container_name}")
 
-        # Process PDFs and split into chunks
         logger.info("Processing PDFs and splitting into chunks...")
         chunks = text_processor.process_pdfs(pdf_files)
 
-        # Create search index
         logger.info("Creating search index...")
         search_helper.create_index_if_not_exists()
 
-        # Generate embeddings
         logger.info("Generating embeddings...")
         embeddings = qa_helper.generate_embeddings(chunks)
 
-        # Upload to search index
         logger.info("Uploading documents to search index...")
         search_helper.upload_documents(chunks, embeddings)
 
@@ -141,4 +143,4 @@ def main():
         return 1
 
 if __name__ == "__main__":
-    main() 
+    main()
