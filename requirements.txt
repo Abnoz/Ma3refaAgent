@@ -1,0 +1,9 @@
+python-dotenv==1.0.0
+langchain==0.1.0
+langchain-openai==0.0.2.post1
+langchain-community==0.0.16
+azure-storage-blob==12.19.0
+azure-search-documents==11.4.0
+azure-identity==1.15.0
+pypdf==3.17.4
+colorama==0.4.6 
