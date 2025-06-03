@@ -170,53 +170,55 @@ class TextProcessor:
                 # Create a PDF reader object
                 pdf_reader = PdfReader(pdf_content)
                 
-                # Extract text from each page
-                pages = []
+                # Process each page individually
                 for page_num, page in enumerate(pdf_reader.pages):
-                    text = page.extract_text()
-                    if text.strip():  # Only include non-empty pages
-                        doc = Document(
+                    try:
+                        # Extract text from the current page
+                        text = page.extract_text()
+                        
+                        if not text.strip():  # Skip empty pages
+                            continue
+                            
+                        # Create a document for this page
+                        page_doc = Document(
                             page_content=text,
                             metadata={
                                 "source": filename,
                                 "page": page_num + 1
                             }
                         )
-                        pages.append(doc)
-                
-                # If adaptive chunking is enabled, analyze content and adjust chunk size
-                if self.use_adaptive_chunking and pages:
-                    # Sample the content for analysis (use first few pages)
-                    sample_text = ""
-                    for i in range(min(3, len(pages))):
-                        sample_text += pages[i].page_content
-                    
-                    # Analyze text complexity
-                    text_stats = self._analyze_text_complexity(sample_text)
-                    
-                    # Determine optimal chunk size
-                    chunk_size, chunk_overlap = self._determine_optimal_chunk_size(text_stats)
-                    
-                    logger.info(f"Adaptive chunking for {filename}: size={chunk_size}, overlap={chunk_overlap}")
-                    
-                    # Create a new text splitter with the optimal parameters
-                    text_splitter = self._create_text_splitter(chunk_size, chunk_overlap)
-                    chunks = text_splitter.split_documents(pages)
-                else:
-                    # Use default text splitter
-                    chunks = self.text_splitter.split_documents(pages)
-                
-                all_chunks.extend(chunks)
-                
-                logger.info(f"Generated {len(chunks)} chunks from {filename}")
+                        
+                        # If adaptive chunking is enabled, analyze this page and adjust chunk size
+                        if self.use_adaptive_chunking:
+                            # Analyze text complexity for this specific page
+                            text_stats = self._analyze_text_complexity(text)
+                            
+                            # Determine optimal chunk size for this page
+                            chunk_size, chunk_overlap = self._determine_optimal_chunk_size(text_stats)
+                            
+                            logger.info(f"Adaptive chunking for {filename} page {page_num+1}: size={chunk_size}, overlap={chunk_overlap}")
+                            
+                            # Create a page-specific text splitter with the optimal parameters
+                            page_text_splitter = self._create_text_splitter(chunk_size, chunk_overlap)
+                            page_chunks = page_text_splitter.split_documents([page_doc])
+                        else:
+                            # Use default text splitter
+                            page_chunks = self.text_splitter.split_documents([page_doc])
+                        
+                        # Add the chunks from this page to our collection
+                        all_chunks.extend(page_chunks)
+                        
+                        logger.info(f"Generated {len(page_chunks)} chunks from {filename} page {page_num+1}")
+                        
+                    except Exception as e:
+                        logger.error(f"Error processing {filename} page {page_num+1}: {str(e)}")
+                        continue
                 
             except Exception as e:
                 logger.error(f"Error processing {filename}: {str(e)}")
                 continue
         
         logger.info(f"Total chunks generated: {len(all_chunks)}")
-        
-        # Save to cache for future use
         self._save_cache(cache_key, all_chunks)
         
         return all_chunks
