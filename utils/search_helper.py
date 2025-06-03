@@ -93,7 +93,8 @@ class SearchHelper:
 
     def _get_upload_cache_path(self) -> str:
         """Get the path to the cache file for uploaded documents."""
-        return os.path.join(self.cache_dir, f"search_index_{self.index_name}_cache.pkl")
+        # Always return the specific cache file path
+        return os.path.join(self.cache_dir, "search_index_ma3refa-pdf-index_cache.pkl")
 
     def _generate_upload_cache_key(self, documents: List[Document], embeddings: List[List[float]]) -> str:
         """Generate a unique cache key based on documents and embeddings."""

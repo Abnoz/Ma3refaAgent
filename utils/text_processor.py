@@ -1,6 +1,7 @@
 import logging
 import os
 import pickle
+import re
 from typing import List, Tuple, Dict, Optional
 from datetime import datetime, timedelta
 from io import BytesIO
@@ -11,18 +12,32 @@ from langchain_core.documents import Document
 logger = logging.getLogger(__name__)
 
 class TextProcessor:
-    def __init__(self, chunk_size: int = 500, chunk_overlap: int = 50, cache_dir: str = ".cache"):
-        self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap,
-            length_function=len,
-            is_separator_regex=False
-        )
+    def __init__(self, chunk_size: int = 500, chunk_overlap: int = 50, cache_dir: str = ".cache", 
+                 min_chunk_size: int = 200, max_chunk_size: int = 1000, 
+                 use_adaptive_chunking: bool = True):
+        self.default_chunk_size = chunk_size
+        self.default_chunk_overlap = chunk_overlap
+        self.min_chunk_size = min_chunk_size
+        self.max_chunk_size = max_chunk_size
+        self.use_adaptive_chunking = use_adaptive_chunking
+        
+        # Initialize with default values, will be adapted per document if adaptive chunking is enabled
+        self.text_splitter = self._create_text_splitter(chunk_size, chunk_overlap)
+        
         self.cache_dir = cache_dir
         self.cache_expiry = timedelta(days=1)
         
         if not os.path.exists(cache_dir):
             os.makedirs(cache_dir)
+    
+    def _create_text_splitter(self, chunk_size, chunk_overlap):
+        """Create a text splitter with the given parameters."""
+        return RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            length_function=len,
+            is_separator_regex=False
+        )
     
     def _get_cache_path(self, cache_key: str) -> str:
         """Get the path to the cache file for processed chunks."""
@@ -76,6 +91,65 @@ class TextProcessor:
         except Exception as e:
             logger.warning(f"Error saving chunks cache: {str(e)}")
 
+    def _analyze_text_complexity(self, text: str) -> Dict:
+        """Analyze text complexity to determine optimal chunk size."""
+        # Calculate text statistics
+        stats = {
+            'length': len(text),
+            'avg_sentence_length': 0,
+            'avg_word_length': 0,
+            'special_content_ratio': 0
+        }
+        
+        # Split into sentences (simple approach)
+        sentences = re.split(r'[.!?]\s+', text)
+        if sentences:
+            stats['avg_sentence_length'] = sum(len(s) for s in sentences) / len(sentences)
+        
+        # Calculate average word length
+        words = re.findall(r'\b\w+\b', text)
+        if words:
+            stats['avg_word_length'] = sum(len(w) for w in words) / len(words)
+        
+        # Check for special content (code blocks, tables, etc.)
+        code_pattern = re.compile(r'(```|\{\{|def\s+\w+\(|function\s+\w+\(|class\s+\w+:|import\s+\w+)')
+        table_pattern = re.compile(r'\|[-|]+\|')
+        list_pattern = re.compile(r'^\s*[\*\-\d]+\.?\s+')
+        
+        special_content_count = (
+            len(code_pattern.findall(text)) + 
+            len(table_pattern.findall(text)) + 
+            len(list_pattern.findall(text))
+        )
+        
+        if len(text) > 0:
+            stats['special_content_ratio'] = special_content_count / (len(text) / 100)  # per 100 chars
+        
+        return stats
+    
+    def _determine_optimal_chunk_size(self, text_stats: Dict) -> Tuple[int, int]:
+        """Determine optimal chunk size based on text complexity analysis."""
+        base_chunk_size = self.default_chunk_size
+        base_overlap = self.default_chunk_overlap
+        
+        # Adjust for sentence length - longer sentences need larger chunks
+        if text_stats['avg_sentence_length'] > 150:
+            base_chunk_size += 200
+            base_overlap += 25
+        elif text_stats['avg_sentence_length'] < 50:
+            base_chunk_size -= 100
+        
+        # Adjust for special content - code, tables need larger chunks to preserve context
+        if text_stats['special_content_ratio'] > 1.0:  # Significant special content
+            base_chunk_size += 300
+            base_overlap += 50
+        
+        # Ensure we stay within bounds
+        chunk_size = max(self.min_chunk_size, min(self.max_chunk_size, base_chunk_size))
+        chunk_overlap = max(20, min(chunk_size // 3, base_overlap))
+        
+        return chunk_size, chunk_overlap
+
     def process_pdfs(self, pdf_files: List[Tuple[str, BytesIO]]) -> List[Document]:
         """Process PDF files and split them into chunks, using cache if available."""
         # Generate a cache key based on the PDF files
@@ -110,8 +184,28 @@ class TextProcessor:
                         )
                         pages.append(doc)
                 
-                # Split the documents into chunks
-                chunks = self.text_splitter.split_documents(pages)
+                # If adaptive chunking is enabled, analyze content and adjust chunk size
+                if self.use_adaptive_chunking and pages:
+                    # Sample the content for analysis (use first few pages)
+                    sample_text = ""
+                    for i in range(min(3, len(pages))):
+                        sample_text += pages[i].page_content
+                    
+                    # Analyze text complexity
+                    text_stats = self._analyze_text_complexity(sample_text)
+                    
+                    # Determine optimal chunk size
+                    chunk_size, chunk_overlap = self._determine_optimal_chunk_size(text_stats)
+                    
+                    logger.info(f"Adaptive chunking for {filename}: size={chunk_size}, overlap={chunk_overlap}")
+                    
+                    # Create a new text splitter with the optimal parameters
+                    text_splitter = self._create_text_splitter(chunk_size, chunk_overlap)
+                    chunks = text_splitter.split_documents(pages)
+                else:
+                    # Use default text splitter
+                    chunks = self.text_splitter.split_documents(pages)
+                
                 all_chunks.extend(chunks)
                 
                 logger.info(f"Generated {len(chunks)} chunks from {filename}")

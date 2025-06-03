@@ -111,15 +111,16 @@ class QAChainHelper:
         return hashlib.md5('_'.join(key_parts).encode()).hexdigest()
 
     def _load_embeddings_cache(self, cache_key: str) -> Optional[List[List[float]]]:  
-        cache_path = self._get_embeddings_cache_path(cache_key)
+        # Always use the specific cache file regardless of the cache_key parameter
+        cache_path = os.path.join(self.cache_dir, "embeddings_e93c742c576835c4efea9de005956062_cache.pkl")
         if not os.path.exists(cache_path):
+            logger.warning(f"Specified embeddings cache file not found: {cache_path}")
             return None
         try:
             with open(cache_path, 'rb') as f:
                 cache_data = pickle.load(f)
-            # Removed the timestamp expiry check
             logger.info(
-                f"Loaded embeddings for {len(cache_data['embeddings'])} documents from cache")
+                f"Loaded embeddings for {len(cache_data['embeddings'])} documents from specified cache file")
             return cache_data['embeddings']
         except Exception as e:
             logger.warning(f"Error loading embeddings cache: {str(e)}")
