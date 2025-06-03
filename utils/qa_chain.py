@@ -72,10 +72,12 @@ class QAChainHelper:
 
         self.retriever = CustomRetriever(search_helper, self.embeddings)
 
-        prompt_template = """Use the following pieces of context to answer the question at the end. 
-            If you don't know the answer, just say that you don't know, don't try to make up an answer.
-            Always answer in Arabic, regardless of the language of the context or question.
-
+        prompt_template = """Use the following pieces of context and the knowldge to answer the question at the end. 
+                If you don't know the answer, Tell the user that you are not sure about what he is saying
+                and ask him to provide you with more context to be able to help him be creative 
+                in those time so you dont make the user feel that you are dumb , don't try to make up an answer Except for greetings.
+                Always answer in Arabic, regardless of the language of the context or question.
+                
             Context: {context}
             Question: {question}
             Answer in Arabic:"""

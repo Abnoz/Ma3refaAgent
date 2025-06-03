@@ -45,6 +45,7 @@ class SourceDocument(BaseModel):
 
 class AnswerResponse(BaseModel):
     answer: str
+    source_documents: Optional[List[SourceDocument]] = None
 
 # Custom streaming callback handler
 class StreamingResponseCallbackHandler(BaseCallbackHandler):
@@ -163,6 +164,7 @@ async def ask_question(request: QuestionRequest):
         result = qa_helper.answer_question(request.question)
         return AnswerResponse(
             answer=result["answer"],
+            source_documents=result["source_documents"]
         )
     except Exception as e:
         logger.error(f"Error answering question: {str(e)}")
