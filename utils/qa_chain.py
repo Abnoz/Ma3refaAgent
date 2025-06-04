@@ -72,13 +72,15 @@ class QAChainHelper:
 
         self.retriever = CustomRetriever(search_helper, self.embeddings)
 
-        prompt_template = """Use the following pieces of context to answer the question at the end. 
-            If you don't know the answer, just say that you don't know, don't try to make up an answer.
-            Always answer in Arabic, regardless of the language of the context or question.
-
-            Context: {context}
-            Question: {question}
-            Answer in Arabic:"""
+        prompt_template = """Use the following pieces of context to answer the user’s question:
+        Respond in the same language used in the user’s question (Arabic or English).
+        Provide a detailed and structured answer whenever possible.
+        If the user asks for a summary (or uses words like "summarize", "outline", "brief", "نُبذة", "ملخّص") — respond using clear bullet points.
+        If the question is unclear or lacks detail, politely suggest that the user can provide more context or clarify the question for a more accurate response and return empty source_documents.
+        After answering, ask the user if they would like the answer summarized or if they want to add more details for better precision.
+        Context: {context}
+        Question: {question}
+        """
 
         PROMPT = PromptTemplate(
             template=prompt_template,
@@ -112,7 +114,7 @@ class QAChainHelper:
 
     def _load_embeddings_cache(self, cache_key: str) -> Optional[List[List[float]]]:  
         # Always use the specific cache file regardless of the cache_key parameter
-        cache_path = os.path.join(self.cache_dir, "embeddings_e93c742c576835c4efea9de005956062_cache.pkl")
+        cache_path = os.path.join(self.cache_dir, "embeddings_7b64c3da14a9c9edf564ec48c8abd27b_cache.pkl")
         if not os.path.exists(cache_path):
             logger.warning(f"Specified embeddings cache file not found: {cache_path}")
             return None

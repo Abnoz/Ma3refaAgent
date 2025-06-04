@@ -45,6 +45,7 @@ class SourceDocument(BaseModel):
 
 class AnswerResponse(BaseModel):
     answer: str
+    source_documents: Optional[List[SourceDocument]] = None
 
 # Custom streaming callback handler
 class StreamingResponseCallbackHandler(BaseCallbackHandler):
@@ -163,6 +164,7 @@ async def ask_question(request: QuestionRequest):
         result = qa_helper.answer_question(request.question)
         return AnswerResponse(
             answer=result["answer"],
+            source_documents=result["source_documents"]
         )
     except Exception as e:
         logger.error(f"Error answering question: {str(e)}")
@@ -196,11 +198,12 @@ async def ask_question_stream(request: QuestionRequest):
                 If you don't know the answer, Tell the user that you are not sure about what he is saying
                 and ask him to provide you with more context to be able to help him be creative 
                 in those time so you dont make the user feel that you are dumb , don't try to make up an answer Except for greetings.
-                Always answer in Arabic, regardless of the language of the context or question.
-                
+                regardless of the language of the context or question.
+                Respond in the same language used in the user’s question (Arabic or English).
+
                 Context: {context}
                 Question: {question}
-                Answer in Arabic:"""
+                """
                 
                 PROMPT = PromptTemplate(
                     template=prompt_template,
