@@ -29,7 +29,9 @@ def setup_environment():
         'AZURE_SEARCH_ENDPOINT',
         'AZURE_SEARCH_KEY',
         'AZURE_SEARCH_INDEX_NAME',
-        'AZURE_OPENAI_API_VERSION'
+        'AZURE_OPENAI_API_VERSION',
+        'AZURE_VISION_ENDPOINT',
+        'AZURE_VISION_KEY'
     ]
     
     missing_vars = [var for var in required_vars if not os.getenv(var)]
@@ -46,7 +48,11 @@ def process_documents(container_name: str):
             os.getenv('AZURE_STORAGE_CONNECTION_STRING'),
             cache_dir=cache_dir
         )
-        text_processor = TextProcessor(cache_dir=cache_dir)
+        text_processor = TextProcessor(
+            cache_dir=cache_dir,
+            azure_vision_endpoint=os.getenv('AZURE_VISION_ENDPOINT'),
+            azure_vision_key=os.getenv('AZURE_VISION_KEY')
+        )
         search_helper = SearchHelper(
             endpoint=os.getenv('AZURE_SEARCH_ENDPOINT'),
             key=os.getenv('AZURE_SEARCH_KEY'),

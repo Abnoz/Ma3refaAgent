@@ -8,18 +8,32 @@ from io import BytesIO
 from pypdf import PdfReader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
+from azure.cognitiveservices.vision.computervision import ComputerVisionClient
+from azure.cognitiveservices.vision.computervision.models import OperationStatusCodes
+from msrest.authentication import CognitiveServicesCredentials
+from pdf2image import convert_from_bytes
 
 logger = logging.getLogger(__name__)
 
 class TextProcessor:
     def __init__(self, chunk_size: int = 500, chunk_overlap: int = 50, cache_dir: str = ".cache", 
                  min_chunk_size: int = 200, max_chunk_size: int = 1000, 
-                 use_adaptive_chunking: bool = True):
+                 use_adaptive_chunking: bool = True,
+                 azure_vision_endpoint: Optional[str] = None,
+                 azure_vision_key: Optional[str] = None):
         self.default_chunk_size = chunk_size
         self.default_chunk_overlap = chunk_overlap
         self.min_chunk_size = min_chunk_size
         self.max_chunk_size = max_chunk_size
         self.use_adaptive_chunking = use_adaptive_chunking
+        
+        # Initialize Azure Vision client if credentials are provided
+        self.vision_client = None
+        if azure_vision_endpoint and azure_vision_key:
+            self.vision_client = ComputerVisionClient(
+                endpoint=azure_vision_endpoint,
+                credentials=CognitiveServicesCredentials(azure_vision_key)
+            )
         
         # Initialize with default values, will be adapted per document if adaptive chunking is enabled
         self.text_splitter = self._create_text_splitter(chunk_size, chunk_overlap)
@@ -150,6 +164,42 @@ class TextProcessor:
         
         return chunk_size, chunk_overlap
 
+    def _extract_text_with_azure_vision(self, image_bytes: bytes) -> str:
+        """Extract text from an image using Azure Vision API."""
+        if not self.vision_client:
+            raise ValueError("Azure Vision credentials not provided during initialization")
+
+        try:
+            # Read the image
+            read_response = self.vision_client.read_in_stream(BytesIO(image_bytes), raw=True)
+            
+            # Get the operation location (URL with an ID at the end)
+            read_operation_location = read_response.headers["Operation-Location"]
+            # Get the ID from the URL
+            operation_id = read_operation_location.split("/")[-1]
+
+            # Wait for the operation to complete
+            while True:
+                read_result = self.vision_client.get_read_result(operation_id)
+                if read_result.status not in ['notStarted', 'running']:
+                    break
+
+            # Extract the text
+            if read_result.status == OperationStatusCodes.succeeded:
+                text_lines = []
+                for text_result in read_result.analyze_result.read_results:
+                    for line in text_result.lines:
+                        text_lines.append(line.text)
+                return "\n".join(text_lines)
+            else:
+                raise Exception(
+                    f"Text extraction failed with status: {read_result.status}"
+                )
+
+        except Exception as e:
+            logger.error(f"Error in Azure Vision text extraction: {str(e)}")
+            raise
+
     def process_pdfs(self, pdf_files: List[Tuple[str, BytesIO]]) -> List[Document]:
         """Process PDF files and split them into chunks, using cache if available."""
         # Generate a cache key based on the PDF files
@@ -173,8 +223,24 @@ class TextProcessor:
                 # Process each page individually
                 for page_num, page in enumerate(pdf_reader.pages):
                     try:
-                        # Extract text from the current page
-                        text = page.extract_text()
+                        # Extract text using Azure Vision if available, otherwise fallback to PyPDF
+                        if self.vision_client:
+                            # Convert PDF page to image bytes
+                            images = convert_from_bytes(pdf_content.getvalue(), first_page=page_num+1, last_page=page_num+1)
+                            if not images:
+                                logger.warning(f"Could not convert page {page_num+1} to image in {filename}")
+                                continue
+                            
+                            # Convert PIL Image to bytes
+                            img_byte_arr = BytesIO()
+                            images[0].save(img_byte_arr, format='PNG')
+                            img_byte_arr = img_byte_arr.getvalue()
+                            
+                            # Extract text using Azure Vision
+                            text = self._extract_text_with_azure_vision(img_byte_arr)
+                        else:
+                            # Fallback to PyPDF text extraction
+                            text = page.extract_text()
                         
                         if not text.strip():  # Skip empty pages
                             continue
@@ -198,27 +264,26 @@ class TextProcessor:
                             
                             logger.info(f"Adaptive chunking for {filename} page {page_num+1}: size={chunk_size}, overlap={chunk_overlap}")
                             
-                            # Create a page-specific text splitter with the optimal parameters
-                            page_text_splitter = self._create_text_splitter(chunk_size, chunk_overlap)
-                            page_chunks = page_text_splitter.split_documents([page_doc])
+                            # Create a new text splitter with the optimal parameters
+                            text_splitter = self._create_text_splitter(chunk_size, chunk_overlap)
                         else:
-                            # Use default text splitter
-                            page_chunks = self.text_splitter.split_documents([page_doc])
+                            # Use the default text splitter
+                            text_splitter = self.text_splitter
                         
-                        # Add the chunks from this page to our collection
-                        all_chunks.extend(page_chunks)
-                        
-                        logger.info(f"Generated {len(page_chunks)} chunks from {filename} page {page_num+1}")
+                        # Split the page into chunks
+                        chunks = text_splitter.split_documents([page_doc])
+                        all_chunks.extend(chunks)
                         
                     except Exception as e:
-                        logger.error(f"Error processing {filename} page {page_num+1}: {str(e)}")
+                        logger.error(f"Error processing page {page_num + 1} of {filename}: {str(e)}")
                         continue
                 
             except Exception as e:
-                logger.error(f"Error processing {filename}: {str(e)}")
+                logger.error(f"Error processing file {filename}: {str(e)}")
                 continue
         
-        logger.info(f"Total chunks generated: {len(all_chunks)}")
-        self._save_cache(cache_key, all_chunks)
+        # Save the processed chunks to cache
+        if all_chunks:
+            self._save_cache(cache_key, all_chunks)
         
         return all_chunks

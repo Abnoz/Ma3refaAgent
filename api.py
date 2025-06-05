@@ -70,7 +70,9 @@ def initialize_qa_helper():
             'AZURE_SEARCH_ENDPOINT',
             'AZURE_SEARCH_KEY',
             'AZURE_SEARCH_INDEX_NAME',
-            'AZURE_OPENAI_API_VERSION'
+            'AZURE_OPENAI_API_VERSION',
+            'AZURE_VISION_ENDPOINT',  # Added for Azure Vision
+            'AZURE_VISION_KEY'  # Added for Azure Vision
         ]
         
         missing_vars = [var for var in required_vars if not os.getenv(var)]
@@ -85,7 +87,11 @@ def initialize_qa_helper():
             os.getenv('AZURE_STORAGE_CONNECTION_STRING'),
             cache_dir=cache_dir
         )
-        text_processor = TextProcessor(cache_dir=cache_dir)
+        text_processor = TextProcessor(
+            cache_dir=cache_dir,
+            azure_vision_endpoint=os.getenv('AZURE_VISION_ENDPOINT'),
+            azure_vision_key=os.getenv('AZURE_VISION_KEY')
+        )
         search_helper = SearchHelper(
             endpoint=os.getenv('AZURE_SEARCH_ENDPOINT'),
             key=os.getenv('AZURE_SEARCH_KEY'),
@@ -177,7 +183,6 @@ async def ask_question_stream(request: QuestionRequest):
         raise HTTPException(status_code=503, detail="Service not initialized yet")
     
     try:
-
         class RealTimeStreamingHandler(BaseCallbackHandler):
             def __init__(self):
                 self.streaming_started = False
@@ -187,23 +192,31 @@ async def ask_question_stream(request: QuestionRequest):
                 # Yield the token immediately
                 yield token
         
-
         async def response_generator():
             try:
-
                 from langchain.chains import RetrievalQA
                 from langchain.prompts import PromptTemplate
                 
-                prompt_template = """Use the following pieces of context and the knowldge to answer the question at the end. 
-                If you don't know the answer, Tell the user that you are not sure about what he is saying
-                and ask him to provide you with more context to be able to help him be creative 
-                in those time so you dont make the user feel that you are dumb , don't try to make up an answer Except for greetings.
-                regardless of the language of the context or question.
-                Respond in the same language used in the user’s question (Arabic or English).
+                prompt_template = """Use the following pieces of context to answer the question at the end. 
+                Only use the information from the provided context. If you don't find the specific information in the context:
+                1. Clearly state that you cannot find the exact information in the available documents
+                2. Ask the user if they would like to rephrase or provide more details to help you find relevant information
+                
+                Important Rules:
+                - Answer ONLY based on the provided context - do not use external knowledge
+                - If the question is in English, answer in English
+                - If the question is in Arabic, answer in Arabic
+                - If asked for a summary or overview, structure the response in bullet points
+                - Maximum 2-3 references from the context
+                - If the question is unclear or too broad, ask for clarification
+                - After answering, ask if the user would like:
+                  * A more detailed explanation
+                  * A summary of the answer
+                  * To rephrase their question for better results
 
                 Context: {context}
                 Question: {question}
-                """
+                Answer: """
                 
                 PROMPT = PromptTemplate(
                     template=prompt_template,
@@ -216,12 +229,19 @@ async def ask_question_stream(request: QuestionRequest):
                 # Configure the LLM with the streaming handler
                 streaming_llm = qa_helper.llm.with_config({"callbacks": [streaming_handler]})
                 
-                # Create a streaming QA chain
+                # Create a streaming QA chain with limited number of documents
                 streaming_qa_chain = RetrievalQA.from_chain_type(
                     llm=streaming_llm,
                     chain_type="stuff",
                     retriever=qa_helper.retriever,
-                    chain_type_kwargs={"prompt": PROMPT},
+                    chain_type_kwargs={
+                        "prompt": PROMPT,
+                        "document_prompt": PromptTemplate(
+                            template="Content: {page_content}\nSource: {source}",
+                            input_variables=["page_content", "source"]
+                        ),
+                        "document_separator": "\n\n"
+                    },
                     return_source_documents=True
                 )
                 
