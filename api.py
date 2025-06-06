@@ -11,6 +11,8 @@ from utils.text_processor import TextProcessor
 from utils.search_helper import SearchHelper
 from utils.qa_chain import QAChainHelper
 from langchain.callbacks.base import BaseCallbackHandler
+from azure.search.documents.indexes import SearchIndexClient
+from azure.core.credentials import AzureKeyCredential
 
 # Configure logging
 logging.basicConfig(
@@ -62,7 +64,6 @@ def initialize_qa_helper():
     try:
         # Setup environment variables
         required_vars = [
-            'AZURE_STORAGE_CONNECTION_STRING',
             'AZURE_OPENAI_API_KEY',
             'AZURE_OPENAI_ENDPOINT',
             'AZURE_OPENAI_EMBEDDING_DEPLOYMENT',
@@ -79,25 +80,32 @@ def initialize_qa_helper():
         if missing_vars:
             raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
 
+        # Add necessary imports
+        from azure.search.documents.indexes import SearchIndexClient
+        from azure.core.credentials import AzureKeyCredential
+
         # Initialize components
         cache_dir = os.getenv('CACHE_DIR', '.cache')
-        container_name = os.getenv('AZURE_STORAGE_CONTAINER_NAME', 'documents')
         
-        blob_helper = BlobStorageHelper(
-            os.getenv('AZURE_STORAGE_CONNECTION_STRING'),
-            cache_dir=cache_dir
+        # Check if the index exists
+        index_client = SearchIndexClient(
+            endpoint=os.getenv('AZURE_SEARCH_ENDPOINT'),
+            credential=AzureKeyCredential(os.getenv('AZURE_SEARCH_KEY'))
         )
-        text_processor = TextProcessor(
-            cache_dir=cache_dir,
-            azure_vision_endpoint=os.getenv('AZURE_VISION_ENDPOINT'),
-            azure_vision_key=os.getenv('AZURE_VISION_KEY')
-        )
+        
+        index_exists = os.getenv('AZURE_SEARCH_INDEX_NAME') in [index.name for index in index_client.list_indexes()]
+        if not index_exists:
+            raise ValueError(f"Search index '{os.getenv('AZURE_SEARCH_INDEX_NAME')}' does not exist. Please create it first.")
+        
+        # Initialize search helper and QA helper without processing documents
         search_helper = SearchHelper(
             endpoint=os.getenv('AZURE_SEARCH_ENDPOINT'),
             key=os.getenv('AZURE_SEARCH_KEY'),
             index_name=os.getenv('AZURE_SEARCH_INDEX_NAME'),
             cache_dir=cache_dir
         )
+        
+        # Initialize QA helper with embeddings
         qa_helper = QAChainHelper(
             openai_endpoint=os.getenv('AZURE_OPENAI_ENDPOINT'),
             openai_api_key=os.getenv('AZURE_OPENAI_API_KEY'),
@@ -108,40 +116,7 @@ def initialize_qa_helper():
             cache_dir=cache_dir
         )
 
-        # Process documents
-        logger.info("Downloading PDFs from blob storage...")
-        pdf_files = blob_helper.download_pdfs_from_container(container_name)
-        
-        if not pdf_files:
-            raise ValueError(f"No PDF files found in container {container_name}")
-
-        logger.info("Processing PDFs and splitting into chunks...")
-        chunks = text_processor.process_pdfs(pdf_files)
-
-        logger.info("Creating search index...")
-        search_helper.create_index_if_not_exists()
-        
-        # Check if we have cached embeddings for these chunks
-        cache_key = qa_helper._generate_cache_key(chunks)
-        cached_embeddings = qa_helper._load_embeddings_cache(cache_key)
-        
-        if cached_embeddings:
-            logger.info("Using cached embeddings...")
-            embeddings = cached_embeddings
-        else:
-            logger.info("Generating embeddings...")
-            embeddings = qa_helper.generate_embeddings(chunks)
-        
-        # Check if documents are already uploaded to search index
-        upload_cache_key = search_helper._generate_upload_cache_key(chunks, embeddings)
-        upload_cache = search_helper._load_upload_cache()
-        
-        if upload_cache and upload_cache_key in upload_cache.get('keys', []):
-            logger.info("Documents already uploaded to search index, skipping upload")
-        else:
-            logger.info("Uploading documents to search index...")
-            search_helper.upload_documents(chunks, embeddings)
-
+        logger.info("Successfully connected to existing search index")
         return qa_helper
 
     except Exception as e:
@@ -161,7 +136,7 @@ async def startup_event():
         logger.error(f"Failed to initialize QA helper: {str(e)}")
 
 # Standard JSON response endpoint
-@app.post("/api/ask", response_model=AnswerResponse)
+@app.post("/ask", response_model=AnswerResponse)
 async def ask_question(request: QuestionRequest):
     if qa_helper is None:
         raise HTTPException(status_code=503, detail="Service not initialized yet")

@@ -33,8 +33,7 @@ class CustomRetriever(BaseRetriever):
             # Get top 3 most relevant results with higher similarity threshold
             results = self.search_helper.vector_search(
                 query_embedding, 
-                query_text=query,  # Also include text for hybrid search
-                top_k=3,  # Limit to 3 documents
+                top_k=3  
             )
             
             # Convert to Documents
